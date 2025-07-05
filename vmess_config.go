@@ -3,67 +3,80 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 )
 
 type VMessConfig struct {
-	Inbounds  []Inbound  `json:"inbound"`
-	Outbounds []Outbound `json:"outbound"`
+	V    json.Number `json:"v"`
+	Ps   string      `json:"ps"`
+	Add  string      `json:"add"`
+	Port json.Number `json:"port"`
+	ID   string      `json:"id"`
+	Aid  json.Number `json:"aid"`
+	Net  string      `json:"net"`
+	Type string      `json:"type"`
+	Host string      `json:"host"`
+	Path string      `json:"path"`
+	TLS  string      `json:"tls"`
 }
 
-type Inbound struct {
-	Port     int    `json:"port"`
-	Listen   string `json:"listen,omitempty"`
-	Protocol string `json:"protocol"`
-	Settings struct {
-		Clients []map[string]string `json:"clients"`
-	} `json:"settings"`
-}
-
-type Outbound struct {
-	Protocol       string         `json:"protocol"`
-	Settings       map[string]any `json:"settings"`
-	StreamSettings map[string]any `json:"streamSettings,omitempty"`
-	Tag            string         `json:"tag,omitempty"`
-}
-
-func parseVMess(link string) (*VMessConfig, error) {
-	encoded := strings.TrimPrefix(link, "vmess://")
-	data, err := base64.StdEncoding.DecodeString(encoded)
+func decodeVMessLink(link string) (*VMessConfig, error) {
+	if len(link) < 8 || !strings.HasPrefix(link, PROTOCOL_VMESS) {
+		return nil, fmt.Errorf("invalid vmess link")
+	}
+	raw := link[8:]
+	decoded, err := base64.StdEncoding.DecodeString(raw)
 	if err != nil {
 		return nil, err
 	}
-
-	var config map[string]any
-	err = json.Unmarshal(data, &config)
-	if err != nil {
+	var cfg VMessConfig
+	if err := json.Unmarshal(decoded, &cfg); err != nil {
 		return nil, err
 	}
+	return &cfg, nil
+}
 
-	outbound := Outbound{
-		Protocol: "vmess",
-		Settings: map[string]any{
-			"vnext": []map[string]any{
-				{
-					"address": config["add"],
-					"port":    toInt(config["port"]),
-					"users": []map[string]any{
+func (cfg *VMessConfig) generateV2rayConfig() *V2RayConfig {
+	v2rayCfg := &V2RayConfig{
+		Log:      Log{},
+		Inbounds: []Inbound{},
+		Outbounds: []Outbound{
+			{
+				Protocol: "vmess",
+				Settings: map[string]any{
+					"vnext": []map[string]any{
 						{
-							"id":       config["id"],
-							"alterId":  toInt(config["aid"]),
-							"security": "auto",
+							"address": cfg.Add,
+							"port":    toInt(cfg.Port),
+							"users": []map[string]any{
+								{
+									"id":       cfg.ID,
+									"alterID":  toInt(cfg.Aid),
+									"security": "auto",
+								},
+							},
 						},
+					},
+				},
+				StreamSettings: &StreamSettings{
+					Network: cfg.Net,
+					Security: func() string {
+						if cfg.TLS == "tls" {
+							return "tls"
+						}
+						return "none"
+					}(),
+					HTTPSettings: map[string]any{
+						"path": cfg.Path,
+						"host": []string{cfg.Host},
 					},
 				},
 			},
 		},
 	}
-
-	return &VMessConfig{
-		Inbounds:  []Inbound{},
-		Outbounds: []Outbound{outbound},
-	}, nil
+	return v2rayCfg
 }
 
 func toInt(v any) int {
